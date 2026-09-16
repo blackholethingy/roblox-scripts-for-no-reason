@@ -1,25 +1,20 @@
 -- ==========================================================
 -- NODE AUTO-DOER
--- FIXED DIRECT WALKING + OPTIONAL PATHFINDING
+-- HOLD CLICK + HOLD KEY EDITION
 -- ==========================================================
---
--- MOVEMENT:
---
--- DIRECT
---   Uses Humanoid:MoveTo()
---   NO PathfindingService
---
--- PATHFINDING
---   Uses Roblox PathfindingService
 --
 -- NODE TYPES:
 --
 -- WALK
+-- TP
 -- WAIT
 -- PROXIMITY
 -- PROMPT
+-- CLICK
+-- HOLD CLICK
 -- JUMP
 -- KEY
+-- HOLD KEY
 --
 -- ==========================================================
 
@@ -50,11 +45,15 @@ local playerGui =
 local mouse =
 	player:GetMouse()
 
+local camera =
+	Workspace.CurrentCamera
+
 -- ==========================================================
 -- CLEAN OLD VERSION
 -- ==========================================================
 
 if getgenv().NodeAutoDoerCleanup then
+
 	pcall(
 		getgenv().NodeAutoDoerCleanup
 	)
@@ -65,6 +64,7 @@ end
 -- ==========================================================
 
 if not getgenv().AutoNodes then
+
 	getgenv().AutoNodes = {}
 end
 
@@ -80,10 +80,13 @@ local SETTINGS = {
 	MovementMode =
 		"Direct",
 
-	-- Direct
+	-- DIRECT
 
 	DirectArrivalDistance =
 		1.75,
+
+	DirectRefreshRate =
+		0.15,
 
 	DirectStuckCheckInterval =
 		0.8,
@@ -94,15 +97,10 @@ local SETTINGS = {
 	DirectAutoJump =
 		true,
 
-	-- How often MoveTo target is refreshed.
-	DirectRefreshRate =
-		0.15,
-
-	-- 0 = infinite
 	DirectTimeout =
 		0,
 
-	-- Pathfinding
+	-- PATHFINDING
 
 	AgentRadius =
 		2,
@@ -134,10 +132,22 @@ local SETTINGS = {
 	MaxPathRetries =
 		5,
 
-	-- Nodes
+	-- OTHER
 
 	DefaultProximityDistance =
-		6
+		6,
+
+	TeleportHeightOffset =
+		3,
+
+	DefaultWaitDuration =
+		2,
+
+	DefaultHoldKeyDuration =
+		1,
+
+	DefaultHoldClickDuration =
+		1
 }
 
 -- ==========================================================
@@ -195,7 +205,7 @@ local function track(connection)
 end
 
 -- ==========================================================
--- GET CHARACTER
+-- CHARACTER
 -- ==========================================================
 
 local function getCharacter()
@@ -222,7 +232,6 @@ local function getCharacter()
 	if not humanoid
 		or not root
 	then
-
 		return nil
 	end
 
@@ -236,7 +245,7 @@ local function getCharacter()
 end
 
 -- ==========================================================
--- STOP CHARACTER
+-- STOP MOVEMENT
 -- ==========================================================
 
 local function stopMovement()
@@ -250,7 +259,6 @@ local function stopMovement()
 		and root
 	then
 
-		-- Cancel MoveTo.
 		humanoid:
 			MoveTo(
 				root.Position
@@ -295,7 +303,9 @@ local function getInstancePosition(
 			GetPivot().Position
 	end
 
-	if instance:IsA("ProximityPrompt") then
+	if instance:IsA("ProximityPrompt")
+		or instance:IsA("ClickDetector")
+	then
 
 		local parent =
 			instance.Parent
@@ -307,6 +317,11 @@ local function getInstancePosition(
 		elseif parent:IsA("BasePart") then
 
 			return parent.Position
+
+		elseif parent:IsA("Model") then
+
+			return parent:
+				GetPivot().Position
 		end
 	end
 
@@ -337,7 +352,9 @@ local function getNodePosition(
 		return nil
 	end
 
-	if node.Type == "Walk" then
+	if node.Type == "Walk"
+		or node.Type == "TP"
+	then
 
 		return node.Position
 
@@ -351,6 +368,14 @@ local function getNodePosition(
 
 		return getInstancePosition(
 			node.Prompt
+		)
+
+	elseif node.Type == "Click"
+		or node.Type == "HoldClick"
+	then
+
+		return getInstancePosition(
+			node.ClickDetector
 		)
 	end
 
@@ -377,6 +402,11 @@ local function nodeText(
 		return tostring(index)
 			.. ". WALK"
 
+	elseif node.Type == "TP" then
+
+		return tostring(index)
+			.. ". TP"
+
 	elseif node.Type == "Wait" then
 
 		return tostring(index)
@@ -384,7 +414,7 @@ local function nodeText(
 			.. string.format(
 				"%.1fs",
 				node.Duration
-					or 2
+					or SETTINGS.DefaultWaitDuration
 			)
 
 	elseif node.Type == "Proximity" then
@@ -413,6 +443,27 @@ local function nodeText(
 				or "missing"
 			)
 
+	elseif node.Type == "Click" then
+
+		return tostring(index)
+			.. ". CLICK "
+			.. (
+				node.ClickDetector
+				and node.ClickDetector.Parent
+				and node.ClickDetector.Parent.Name
+				or "missing"
+			)
+
+	elseif node.Type == "HoldClick" then
+
+		return tostring(index)
+			.. ". HOLD CLICK "
+			.. string.format(
+				"%.1fs",
+				node.Duration
+					or SETTINGS.DefaultHoldClickDuration
+			)
+
 	elseif node.Type == "Jump" then
 
 		return tostring(index)
@@ -428,6 +479,22 @@ local function nodeText(
 				or "None"
 			)
 			.. "]"
+
+	elseif node.Type == "HoldKey" then
+
+		return tostring(index)
+			.. ". HOLD KEY ["
+			.. (
+				node.KeyCode
+				and node.KeyCode.Name
+				or "None"
+			)
+			.. "] "
+			.. string.format(
+				"%.1fs",
+				node.Duration
+					or SETTINGS.DefaultHoldKeyDuration
+			)
 	end
 
 	return tostring(index)
@@ -435,6 +502,78 @@ local function nodeText(
 		.. tostring(
 			node.Type
 		)
+end
+
+-- ==========================================================
+-- MARKER COLORS
+-- ==========================================================
+
+local function markerColor(
+	node
+)
+
+	if node.Type == "Walk" then
+
+		return Color3.fromRGB(
+			70,
+			210,
+			110
+		)
+
+	elseif node.Type == "TP" then
+
+		return Color3.fromRGB(
+			190,
+			80,
+			255
+		)
+
+	elseif node.Type == "Proximity" then
+
+		return Color3.fromRGB(
+			255,
+			180,
+			70
+		)
+
+	elseif node.Type == "Prompt" then
+
+		return Color3.fromRGB(
+			70,
+			180,
+			255
+		)
+
+	elseif node.Type == "Click" then
+
+		return Color3.fromRGB(
+			255,
+			90,
+			90
+		)
+
+	elseif node.Type == "HoldClick" then
+
+		return Color3.fromRGB(
+			255,
+			120,
+			50
+		)
+
+	elseif node.Type == "HoldKey" then
+
+		return Color3.fromRGB(
+			90,
+			230,
+			230
+		)
+	end
+
+	return Color3.fromRGB(
+		240,
+		240,
+		240
+	)
 end
 
 -- ==========================================================
@@ -497,6 +636,11 @@ local function createMarker(
 	part.Material =
 		Enum.Material.Neon
 
+	part.Color =
+		markerColor(
+			node
+		)
+
 	part.Anchored =
 		true
 
@@ -510,7 +654,7 @@ local function createMarker(
 		false
 
 	part.Transparency =
-		0.2
+		0.15
 
 	part.Position =
 		position
@@ -530,8 +674,8 @@ local function createMarker(
 
 	billboard.Size =
 		UDim2.fromOffset(
-			130,
-			45
+			160,
+			48
 		)
 
 	billboard.StudsOffset =
@@ -650,6 +794,11 @@ local function updateMarkers()
 					)
 			end
 
+			marker.Part.Color =
+				markerColor(
+					node
+				)
+
 			marker.Label.Text =
 				nodeText(
 					node,
@@ -662,9 +811,9 @@ local function updateMarkers()
 
 				marker.Part.Size =
 					Vector3.new(
-						1.5,
-						1.5,
-						1.5
+						1.6,
+						1.6,
+						1.6
 					)
 
 			elseif selectedNodeIndex
@@ -673,9 +822,9 @@ local function updateMarkers()
 
 				marker.Part.Size =
 					Vector3.new(
-						1.2,
-						1.2,
-						1.2
+						1.25,
+						1.25,
+						1.25
 					)
 
 			else
@@ -692,14 +841,7 @@ local function updateMarkers()
 end
 
 -- ==========================================================
--- FIXED DIRECT WALK
--- ==========================================================
---
--- Humanoid:Move() can be overwritten by PlayerModule.
---
--- MoveTo() gives Humanoid an actual destination and is much
--- more reliable for autonomous walking.
---
+-- DIRECT WALK
 -- ==========================================================
 
 local function directWalk(
@@ -718,17 +860,17 @@ local function directWalk(
 	local lastRefresh =
 		0
 
-	local lastStuckCheck =
+	local lastCheck =
 		os.clock()
 
 	local _,
 		_,
-		firstRoot =
+		startRoot =
 		getCharacter()
 
 	local lastPosition =
-		firstRoot
-		and firstRoot.Position
+		startRoot
+		and startRoot.Position
 		or nil
 
 	while alive do
@@ -758,18 +900,14 @@ local function directWalk(
 			targetPosition
 			- root.Position
 
-		local horizontalDistance =
+		local horizontal =
 			Vector3.new(
 				difference.X,
 				0,
 				difference.Z
-			).Magnitude
+			)
 
-		-- ==================================================
-		-- ARRIVAL
-		-- ==================================================
-
-		if horizontalDistance
+		if horizontal.Magnitude
 			<= arrivalDistance
 		then
 
@@ -777,10 +915,6 @@ local function directWalk(
 
 			return true
 		end
-
-		-- ==================================================
-		-- OPTIONAL TIMEOUT
-		-- ==================================================
 
 		if SETTINGS.DirectTimeout > 0
 			and os.clock()
@@ -793,10 +927,6 @@ local function directWalk(
 			return false,
 				"Direct timeout"
 		end
-
-		-- ==================================================
-		-- REFRESH MOVETO
-		-- ==================================================
 
 		if os.clock()
 			- lastRefresh
@@ -812,12 +942,8 @@ local function directWalk(
 				os.clock()
 		end
 
-		-- ==================================================
-		-- STUCK CHECK
-		-- ==================================================
-
 		if os.clock()
-			- lastStuckCheck
+			- lastCheck
 			>= SETTINGS.DirectStuckCheckInterval
 		then
 
@@ -831,15 +957,11 @@ local function directWalk(
 
 				if moved
 					<= SETTINGS.DirectMinimumMovement
+					and SETTINGS.DirectAutoJump
 				then
 
-					if SETTINGS.DirectAutoJump then
-
-						humanoid.Jump =
-							true
-					end
-
-					-- Force MoveTo again after jump.
+					humanoid.Jump =
+						true
 
 					humanoid:
 						MoveTo(
@@ -851,7 +973,7 @@ local function directWalk(
 			lastPosition =
 				root.Position
 
-			lastStuckCheck =
+			lastCheck =
 				os.clock()
 		end
 
@@ -863,7 +985,7 @@ local function directWalk(
 end
 
 -- ==========================================================
--- PATHFIND WALK
+-- PATHFINDING WALK
 -- ==========================================================
 
 local function pathfindWalk(
@@ -962,23 +1084,23 @@ local function pathfindWalk(
 						true
 				end
 
-				local finalWaypoint =
+				local final =
 					waypointIndex
 					== #waypoints
 
-				local distanceNeeded =
-					finalWaypoint
+				local requiredDistance =
+					final
 					and arrivalDistance
 					or SETTINGS.IntermediateWaypointDistance
 
-				local waypointStarted =
+				local started =
+					os.clock()
+
+				local lastCheck =
 					os.clock()
 
 				local lastPosition =
 					root.Position
-
-				local stuckCheck =
-					os.clock()
 
 				humanoid:
 					MoveTo(
@@ -1012,22 +1134,22 @@ local function pathfindWalk(
 						waypoint.Position
 						- root.Position
 
-					local horizontalDistance =
+					local horizontal =
 						Vector3.new(
 							difference.X,
 							0,
 							difference.Z
-						).Magnitude
+						)
 
-					if horizontalDistance
-						<= distanceNeeded
+					if horizontal.Magnitude
+						<= requiredDistance
 					then
 
 						break
 					end
 
 					if os.clock()
-						- waypointStarted
+						- started
 						>= SETTINGS.WaypointTimeout
 					then
 
@@ -1037,15 +1159,13 @@ local function pathfindWalk(
 						break
 					end
 
-					-- Refresh MoveTo occasionally.
-
 					humanoid:
 						MoveTo(
 							waypoint.Position
 						)
 
 					if os.clock()
-						- stuckCheck
+						- lastCheck
 						>= SETTINGS.PathStuckCheckInterval
 					then
 
@@ -1071,7 +1191,7 @@ local function pathfindWalk(
 						lastPosition =
 							root.Position
 
-						stuckCheck =
+						lastCheck =
 							os.clock()
 					end
 
@@ -1080,6 +1200,7 @@ local function pathfindWalk(
 				end
 
 				if failed then
+
 					break
 				end
 			end
@@ -1134,7 +1255,7 @@ local function walkTo(
 end
 
 -- ==========================================================
--- MOVING PROXIMITY TARGET
+-- PROXIMITY
 -- ==========================================================
 
 local function moveNearTarget(
@@ -1153,18 +1274,9 @@ local function moveNearTarget(
 			"Target missing"
 	end
 
-	local requiredDistance =
+	local distance =
 		node.Distance
 		or SETTINGS.DefaultProximityDistance
-
-	local lastMoveRefresh =
-		0
-
-	local lastStuckCheck =
-		os.clock()
-
-	local previousPosition =
-		nil
 
 	while alive do
 
@@ -1200,15 +1312,15 @@ local function moveNearTarget(
 			targetPosition
 			- root.Position
 
-		local horizontalDistance =
+		local horizontal =
 			Vector3.new(
 				difference.X,
 				0,
 				difference.Z
-			).Magnitude
+			)
 
-		if horizontalDistance
-			<= requiredDistance
+		if horizontal.Magnitude
+			<= distance
 		then
 
 			stopMovement()
@@ -1216,82 +1328,26 @@ local function moveNearTarget(
 			return true
 		end
 
-		-- ==================================================
-		-- DIRECT MODE
-		--
-		-- MoveTo gets refreshed with live target position.
-		-- ==================================================
-
 		if SETTINGS.MovementMode
 			== "Direct"
 		then
 
-			if os.clock()
-				- lastMoveRefresh
-				>= SETTINGS.DirectRefreshRate
-			then
-
-				humanoid:
-					MoveTo(
-						targetPosition
-					)
-
-				lastMoveRefresh =
-					os.clock()
-			end
-
-			if not previousPosition then
-
-				previousPosition =
-					root.Position
-			end
-
-			if os.clock()
-				- lastStuckCheck
-				>= SETTINGS.DirectStuckCheckInterval
-			then
-
-				local moved =
-					(
-						root.Position
-						- previousPosition
-					).Magnitude
-
-				if moved
-					<= SETTINGS.DirectMinimumMovement
-					and SETTINGS.DirectAutoJump
-				then
-
-					humanoid.Jump =
-						true
-
-					humanoid:
-						MoveTo(
-							targetPosition
-						)
-				end
-
-				previousPosition =
-					root.Position
-
-				lastStuckCheck =
-					os.clock()
-			end
+			humanoid:
+				MoveTo(
+					targetPosition
+				)
 
 			RunService.Heartbeat:
 				Wait()
 
 		else
 
-			-- Pathfind toward latest target position.
-
 			local success =
 				pathfindWalk(
 					targetPosition,
 					math.max(
 						1,
-						requiredDistance
-							- 1
+						distance - 1
 					),
 					runId
 				)
@@ -1308,13 +1364,21 @@ local function moveNearTarget(
 end
 
 -- ==========================================================
--- PRESS KEY
+-- KEY PRESS / HOLD
 -- ==========================================================
 
-local function pressKey(
+local function holdKey(
 	keyCode,
 	duration
 )
+
+	if not keyCode
+		or keyCode
+			== Enum.KeyCode.Unknown
+	then
+
+		return false
+	end
 
 	VirtualInputManager:
 		SendKeyEvent(
@@ -1324,12 +1388,22 @@ local function pressKey(
 			game
 		)
 
-	task.wait(
-		math.max(
-			0.03,
-			duration or 0.08
+	local started =
+		os.clock()
+
+	while os.clock()
+		- started
+		< duration
+	do
+
+		if stopRequested then
+			break
+		end
+
+		task.wait(
+			0.02
 		)
-	)
+	end
 
 	VirtualInputManager:
 		SendKeyEvent(
@@ -1338,10 +1412,22 @@ local function pressKey(
 			false,
 			game
 		)
+
+	return true
+end
+
+local function pressKey(
+	keyCode
+)
+
+	return holdKey(
+		keyCode,
+		0.08
+	)
 end
 
 -- ==========================================================
--- PROMPT NODE
+-- PROMPT
 -- ==========================================================
 
 local function executePrompt(
@@ -1363,12 +1449,12 @@ local function executePrompt(
 			"Prompt missing"
 	end
 
-	local promptPosition =
+	local position =
 		getInstancePosition(
 			prompt
 		)
 
-	if not promptPosition then
+	if not position then
 
 		return false,
 			"No prompt position"
@@ -1383,7 +1469,7 @@ local function executePrompt(
 
 	local reached =
 		walkTo(
-			promptPosition,
+			position,
 			distance,
 			runId
 		)
@@ -1394,25 +1480,11 @@ local function executePrompt(
 			"Could not reach prompt"
 	end
 
-	if stopRequested
-		or runId ~= routeId
-	then
-
-		return false,
-			"Stopped"
-	end
-
-	task.wait(
-		0.1
-	)
-
-	-- ======================================================
-	-- EXECUTOR FIREPROMPT
-	-- ======================================================
-
 	local firePrompt =
-		getgenv().
-			fireproximityprompt
+		rawget(
+			getgenv(),
+			"fireproximityprompt"
+		)
 
 	if typeof(firePrompt)
 		== "function"
@@ -1427,31 +1499,351 @@ local function executePrompt(
 			end)
 
 		if success then
-
 			return true
 		end
 	end
 
-	-- ======================================================
-	-- KEY FALLBACK
-	-- ======================================================
-
-	local key =
-		prompt.KeyboardKeyCode
-
-	if key
+	if prompt.KeyboardKeyCode
 		== Enum.KeyCode.Unknown
 	then
 
 		return false,
-			"No keyboard key"
+			"No prompt key"
 	end
 
-	pressKey(
-		key,
+	return holdKey(
+		prompt.KeyboardKeyCode,
 		prompt.HoldDuration
 			+ 0.1
 	)
+end
+
+-- ==========================================================
+-- CLICK DETECTOR HELPERS
+-- ==========================================================
+
+local function clickDetectorPosition(
+	detector
+)
+
+	if not detector
+		or not detector.Parent
+	then
+
+		return nil
+	end
+
+	return getInstancePosition(
+		detector
+	)
+end
+
+local function moveToClickDetector(
+	detector,
+	runId
+)
+
+	local position =
+		clickDetectorPosition(
+			detector
+		)
+
+	if not position then
+
+		return false,
+			"No ClickDetector position"
+	end
+
+	local distance =
+		math.max(
+			1,
+			detector.MaxActivationDistance
+				- 1
+		)
+
+	return walkTo(
+		position,
+		distance,
+		runId
+	)
+end
+
+-- ==========================================================
+-- CLICK NODE
+-- ==========================================================
+
+local function executeClick(
+	node,
+	runId
+)
+
+	local detector =
+		node.ClickDetector
+
+	if not detector
+		or not detector.Parent
+		or not detector:IsA(
+			"ClickDetector"
+		)
+	then
+
+		return false,
+			"ClickDetector missing"
+	end
+
+	local reached =
+		moveToClickDetector(
+			detector,
+			runId
+		)
+
+	if not reached then
+
+		return false,
+			"Could not reach ClickDetector"
+	end
+
+	local fireClick =
+		rawget(
+			getgenv(),
+			"fireclickdetector"
+		)
+
+	if typeof(fireClick)
+		== "function"
+	then
+
+		local success,
+			err =
+			pcall(function()
+
+				fireClick(
+					detector
+				)
+			end)
+
+		if success then
+			return true
+		end
+
+		return false,
+			tostring(err)
+	end
+
+	return false,
+		"fireclickdetector unavailable"
+end
+
+-- ==========================================================
+-- HOLD CLICK NODE
+-- ==========================================================
+--
+-- Unlike CLICK, this physically holds MouseButton1.
+--
+-- It:
+-- 1. walks into ClickDetector range
+-- 2. finds detector position on screen
+-- 3. Mouse1 DOWN
+-- 4. waits Duration
+-- 5. Mouse1 UP
+--
+-- ==========================================================
+
+local function executeHoldClick(
+	node,
+	runId
+)
+
+	local detector =
+		node.ClickDetector
+
+	if not detector
+		or not detector.Parent
+		or not detector:IsA(
+			"ClickDetector"
+		)
+	then
+
+		return false,
+			"ClickDetector missing"
+	end
+
+	local reached =
+		moveToClickDetector(
+			detector,
+			runId
+		)
+
+	if not reached then
+
+		return false,
+			"Could not reach ClickDetector"
+	end
+
+	if stopRequested
+		or runId ~= routeId
+	then
+
+		return false,
+			"Stopped"
+	end
+
+	camera =
+		Workspace.CurrentCamera
+
+	if not camera then
+
+		return false,
+			"No camera"
+	end
+
+	local worldPosition =
+		clickDetectorPosition(
+			detector
+		)
+
+	if not worldPosition then
+
+		return false,
+			"No target position"
+	end
+
+	local screenPosition,
+		onScreen =
+		camera:
+			WorldToViewportPoint(
+				worldPosition
+			)
+
+	if not onScreen then
+
+		return false,
+			"Target not visible on screen"
+	end
+
+	local duration =
+		math.max(
+			0.05,
+			node.Duration
+				or SETTINGS.DefaultHoldClickDuration
+		)
+
+	-- Mouse down.
+
+	VirtualInputManager:
+		SendMouseButtonEvent(
+			screenPosition.X,
+			screenPosition.Y,
+			0,
+			true,
+			game,
+			0
+		)
+
+	local started =
+		os.clock()
+
+	while os.clock()
+		- started
+		< duration
+	do
+
+		if stopRequested
+			or runId ~= routeId
+		then
+
+			break
+		end
+
+		task.wait(
+			0.02
+		)
+	end
+
+	-- Always release.
+
+	VirtualInputManager:
+		SendMouseButtonEvent(
+			screenPosition.X,
+			screenPosition.Y,
+			0,
+			false,
+			game,
+			0
+		)
+
+	return true
+end
+
+-- ==========================================================
+-- TP
+-- ==========================================================
+
+local function executeTeleport(
+	node
+)
+
+	if typeof(node.Position)
+		~= "Vector3"
+	then
+
+		return false,
+			"No TP position"
+	end
+
+	local character,
+		_,
+		root =
+		getCharacter()
+
+	if not character then
+
+		return false,
+			"No character"
+	end
+
+	stopMovement()
+
+	local look =
+		root.CFrame.LookVector
+
+	local flatLook =
+		Vector3.new(
+			look.X,
+			0,
+			look.Z
+		)
+
+	if flatLook.Magnitude
+		< 0.01
+	then
+
+		flatLook =
+			Vector3.new(
+				0,
+				0,
+				-1
+			)
+	end
+
+	flatLook =
+		flatLook.Unit
+
+	root.AssemblyLinearVelocity =
+		Vector3.zero
+
+	root.AssemblyAngularVelocity =
+		Vector3.zero
+
+	root.CFrame =
+		CFrame.lookAt(
+			node.Position,
+			node.Position
+				+ flatLook,
+			Vector3.yAxis
+		)
+
+	task.wait()
 
 	return true
 end
@@ -1467,14 +1859,12 @@ local function executeNode(
 
 	if node.Type == "Walk" then
 
-		if typeof(
-			node.Position
-		)
+		if typeof(node.Position)
 			~= "Vector3"
 		then
 
 			return false,
-				"No position"
+				"No Walk position"
 		end
 
 		return walkTo(
@@ -1486,13 +1876,19 @@ local function executeNode(
 			runId
 		)
 
+	elseif node.Type == "TP" then
+
+		return executeTeleport(
+			node
+		)
+
 	elseif node.Type == "Wait" then
 
 		local duration =
 			math.max(
 				0,
 				node.Duration
-					or 2
+					or SETTINGS.DefaultWaitDuration
 			)
 
 		local started =
@@ -1532,6 +1928,20 @@ local function executeNode(
 			runId
 		)
 
+	elseif node.Type == "Click" then
+
+		return executeClick(
+			node,
+			runId
+		)
+
+	elseif node.Type == "HoldClick" then
+
+		return executeHoldClick(
+			node,
+			runId
+		)
+
 	elseif node.Type == "Jump" then
 
 		local _,
@@ -1552,16 +1962,17 @@ local function executeNode(
 
 	elseif node.Type == "Key" then
 
-		if node.KeyCode then
+		return pressKey(
+			node.KeyCode
+		)
 
-			pressKey(
-				node.KeyCode,
-				node.HoldDuration
-					or 0.08
-			)
+	elseif node.Type == "HoldKey" then
 
-			return true
-		end
+		return holdKey(
+			node.KeyCode,
+			node.Duration
+				or SETTINGS.DefaultHoldKeyDuration
+		)
 	end
 
 	return false,
@@ -1603,15 +2014,15 @@ local frame =
 
 frame.Size =
 	UDim2.fromOffset(
-		400,
-		615
+		430,
+		715
 	)
 
 frame.Position =
 	UDim2.new(
 		1,
-		-420,
-		0.08,
+		-450,
+		0.03,
 		0
 	)
 
@@ -1737,7 +2148,7 @@ status.Parent =
 	frame
 
 -- ==========================================================
--- BUTTON
+-- BUTTON HELPER
 -- ==========================================================
 
 local function makeButton(
@@ -1780,7 +2191,7 @@ local function makeButton(
 		Enum.Font.SourceSansBold
 
 	button.TextSize =
-		12
+		11
 
 	button.TextWrapped =
 		true
@@ -1816,7 +2227,7 @@ local movementButton =
 			72
 		),
 		UDim2.fromOffset(
-			384,
+			414,
 			36
 		)
 	)
@@ -1870,10 +2281,6 @@ movementButton.MouseButton1Click:
 		end
 
 		refreshMovementButton()
-
-		status.Text =
-			"Movement: "
-			.. SETTINGS.MovementMode
 	end)
 
 -- ==========================================================
@@ -1889,7 +2296,7 @@ local runButton =
 			114
 		),
 		UDim2.fromOffset(
-			87,
+			98,
 			34
 		)
 	)
@@ -1906,11 +2313,11 @@ local stopButton =
 		frame,
 		"STOP",
 		UDim2.fromOffset(
-			101,
+			112,
 			114
 		),
 		UDim2.fromOffset(
-			87,
+			98,
 			34
 		)
 	)
@@ -1927,11 +2334,11 @@ local loopButton =
 		frame,
 		"LOOP: OFF",
 		UDim2.fromOffset(
-			194,
+			216,
 			114
 		),
 		UDim2.fromOffset(
-			96,
+			98,
 			34
 		)
 	)
@@ -1941,11 +2348,11 @@ local clearButton =
 		frame,
 		"CLEAR",
 		UDim2.fromOffset(
-			296,
+			320,
 			114
 		),
 		UDim2.fromOffset(
-			96,
+			102,
 			34
 		)
 	)
@@ -1959,7 +2366,7 @@ local addLabel =
 
 addLabel.Size =
 	UDim2.fromOffset(
-		384,
+		414,
 		22
 	)
 
@@ -1994,102 +2401,98 @@ addLabel.TextXAlignment =
 addLabel.Parent =
 	frame
 
+-- ROW 1
+
 local walkHereButton =
 	makeButton(
 		frame,
 		"WALK HERE",
-		UDim2.fromOffset(
-			8,
-			180
-		),
-		UDim2.fromOffset(
-			92,
-			34
-		)
+		UDim2.fromOffset(8, 180),
+		UDim2.fromOffset(98, 34)
 	)
 
 local placeWalkButton =
 	makeButton(
 		frame,
 		"PLACE WALK",
-		UDim2.fromOffset(
-			106,
-			180
-		),
-		UDim2.fromOffset(
-			92,
-			34
-		)
+		UDim2.fromOffset(112, 180),
+		UDim2.fromOffset(98, 34)
+	)
+
+local tpButton =
+	makeButton(
+		frame,
+		"PLACE TP",
+		UDim2.fromOffset(216, 180),
+		UDim2.fromOffset(98, 34)
 	)
 
 local waitButton =
 	makeButton(
 		frame,
 		"WAIT",
-		UDim2.fromOffset(
-			204,
-			180
-		),
-		UDim2.fromOffset(
-			88,
-			34
-		)
+		UDim2.fromOffset(320, 180),
+		UDim2.fromOffset(102, 34)
 	)
 
-local jumpButton =
-	makeButton(
-		frame,
-		"JUMP",
-		UDim2.fromOffset(
-			298,
-			180
-		),
-		UDim2.fromOffset(
-			94,
-			34
-		)
-	)
+-- ROW 2
 
-local proximityButton =
+local proxButton =
 	makeButton(
 		frame,
-		"SELECT PROX",
-		UDim2.fromOffset(
-			8,
-			220
-		),
-		UDim2.fromOffset(
-			120,
-			34
-		)
+		"PROX",
+		UDim2.fromOffset(8, 220),
+		UDim2.fromOffset(98, 34)
 	)
 
 local promptButton =
 	makeButton(
 		frame,
-		"SELECT PROMPT",
-		UDim2.fromOffset(
-			134,
-			220
-		),
-		UDim2.fromOffset(
-			124,
-			34
-		)
+		"PROMPT",
+		UDim2.fromOffset(112, 220),
+		UDim2.fromOffset(98, 34)
+	)
+
+local clickButton =
+	makeButton(
+		frame,
+		"CLICK",
+		UDim2.fromOffset(216, 220),
+		UDim2.fromOffset(98, 34)
+	)
+
+local holdClickButton =
+	makeButton(
+		frame,
+		"HOLD CLICK",
+		UDim2.fromOffset(320, 220),
+		UDim2.fromOffset(102, 34)
+	)
+
+-- ROW 3
+
+local jumpButton =
+	makeButton(
+		frame,
+		"JUMP",
+		UDim2.fromOffset(8, 260),
+		UDim2.fromOffset(98, 34)
 	)
 
 local keyButton =
 	makeButton(
 		frame,
-		"ADD KEY",
-		UDim2.fromOffset(
-			264,
-			220
-		),
-		UDim2.fromOffset(
-			128,
-			34
-		)
+		"KEY",
+		UDim2.fromOffset(112, 260),
+		UDim2.fromOffset(98, 34)
+	)
+
+local holdKeyButton =
+	makeButton(
+		frame,
+		"HOLD KEY",
+		UDim2.fromOffset(216, 260),
+		UDim2.fromOffset(206, 34)
 	)
 
 -- ==========================================================
@@ -2103,14 +2506,14 @@ local nodeList =
 
 nodeList.Size =
 	UDim2.fromOffset(
-		384,
-		220
+		414,
+		245
 	)
 
 nodeList.Position =
 	UDim2.fromOffset(
 		8,
-		262
+		302
 	)
 
 nodeList.BackgroundColor3 =
@@ -2132,18 +2535,18 @@ nodeList.CanvasSize =
 nodeList.Parent =
 	frame
 
-local listLayout =
+local layout =
 	Instance.new(
 		"UIListLayout"
 	)
 
-listLayout.Padding =
+layout.Padding =
 	UDim.new(
 		0,
 		4
 	)
 
-listLayout.Parent =
+layout.Parent =
 	nodeList
 
 -- ==========================================================
@@ -2155,14 +2558,14 @@ local editorLabel =
 
 editorLabel.Size =
 	UDim2.fromOffset(
-		384,
+		414,
 		22
 	)
 
 editorLabel.Position =
 	UDim2.fromOffset(
 		8,
-		490
+		555
 	)
 
 editorLabel.BackgroundTransparency =
@@ -2194,84 +2597,48 @@ local upButton =
 	makeButton(
 		frame,
 		"▲",
-		UDim2.fromOffset(
-			8,
-			516
-		),
-		UDim2.fromOffset(
-			52,
-			32
-		)
+		UDim2.fromOffset(8, 582),
+		UDim2.fromOffset(56, 32)
 	)
 
 local downButton =
 	makeButton(
 		frame,
 		"▼",
-		UDim2.fromOffset(
-			66,
-			516
-		),
-		UDim2.fromOffset(
-			52,
-			32
-		)
+		UDim2.fromOffset(70, 582),
+		UDim2.fromOffset(56, 32)
 	)
 
 local minusButton =
 	makeButton(
 		frame,
 		"-",
-		UDim2.fromOffset(
-			124,
-			516
-		),
-		UDim2.fromOffset(
-			52,
-			32
-		)
+		UDim2.fromOffset(132, 582),
+		UDim2.fromOffset(56, 32)
 	)
 
 local plusButton =
 	makeButton(
 		frame,
 		"+",
-		UDim2.fromOffset(
-			182,
-			516
-		),
-		UDim2.fromOffset(
-			52,
-			32
-		)
+		UDim2.fromOffset(194, 582),
+		UDim2.fromOffset(56, 32)
 	)
 
 local editButton =
 	makeButton(
 		frame,
 		"EDIT",
-		UDim2.fromOffset(
-			240,
-			516
-		),
-		UDim2.fromOffset(
-			70,
-			32
-		)
+		UDim2.fromOffset(256, 582),
+		UDim2.fromOffset(76, 32)
 	)
 
 local deleteButton =
 	makeButton(
 		frame,
 		"DELETE",
-		UDim2.fromOffset(
-			316,
-			516
-		),
-		UDim2.fromOffset(
-			76,
-			32
-		)
+		UDim2.fromOffset(338, 582),
+		UDim2.fromOffset(84, 32)
 	)
 
 deleteButton.BackgroundColor3 =
@@ -2285,14 +2652,8 @@ local killButton =
 	makeButton(
 		frame,
 		"KILL SCRIPT",
-		UDim2.fromOffset(
-			8,
-			560
-		),
-		UDim2.fromOffset(
-			384,
-			42
-		)
+		UDim2.fromOffset(8, 630),
+		UDim2.fromOffset(414, 42)
 	)
 
 killButton.BackgroundColor3 =
@@ -2303,7 +2664,7 @@ killButton.BackgroundColor3 =
 	)
 
 -- ==========================================================
--- GUI LIST LOGIC
+-- LIST LOGIC
 -- ==========================================================
 
 local rows = {}
@@ -2318,8 +2679,7 @@ local function clearRows()
 			and row.Parent
 		then
 
-			row:
-				Destroy()
+			row:Destroy()
 		end
 	end
 
@@ -2350,8 +2710,7 @@ local function updateEditor()
 			"WAIT: "
 			.. string.format(
 				"%.1fs",
-				node.Duration
-					or 2
+				node.Duration or 2
 			)
 
 	elseif node.Type == "Proximity" then
@@ -2359,8 +2718,17 @@ local function updateEditor()
 		editorLabel.Text =
 			"PROX DISTANCE: "
 			.. tostring(
-				node.Distance
-					or 6
+				node.Distance or 6
+			)
+
+	elseif node.Type == "HoldClick" then
+
+		editorLabel.Text =
+			"HOLD CLICK: "
+			.. string.format(
+				"%.1fs",
+				node.Duration
+					or 1
 			)
 
 	elseif node.Type == "Key" then
@@ -2371,6 +2739,22 @@ local function updateEditor()
 				node.KeyCode
 				and node.KeyCode.Name
 				or "None"
+			)
+
+	elseif node.Type == "HoldKey" then
+
+		editorLabel.Text =
+			"HOLD KEY: "
+			.. (
+				node.KeyCode
+				and node.KeyCode.Name
+				or "None"
+			)
+			.. " / "
+			.. string.format(
+				"%.1fs",
+				node.Duration
+					or 1
 			)
 
 	else
@@ -2392,9 +2776,7 @@ rebuildList =
 		) do
 
 			local row =
-				Instance.new(
-					"TextButton"
-				)
+				Instance.new("TextButton")
 
 			row.Size =
 				UDim2.new(
@@ -2494,7 +2876,7 @@ local function addNode(node)
 end
 
 -- ==========================================================
--- NODE BUTTON EVENTS
+-- BASIC BUTTONS
 -- ==========================================================
 
 walkHereButton.MouseButton1Click:
@@ -2515,9 +2897,6 @@ walkHereButton.MouseButton1Click:
 				Position =
 					root.Position
 			})
-
-			status.Text =
-				"Walk node added."
 		end
 	end)
 
@@ -2528,7 +2907,17 @@ placeWalkButton.MouseButton1Click:
 			"Walk"
 
 		status.Text =
-			"Click world position."
+			"Click Walk position."
+	end)
+
+tpButton.MouseButton1Click:
+	Connect(function()
+
+		placementMode =
+			"TP"
+
+		status.Text =
+			"Click TP position."
 	end)
 
 waitButton.MouseButton1Click:
@@ -2540,21 +2929,11 @@ waitButton.MouseButton1Click:
 				"Wait",
 
 			Duration =
-				2
+				SETTINGS.DefaultWaitDuration
 		})
 	end)
 
-jumpButton.MouseButton1Click:
-	Connect(function()
-
-		addNode({
-
-			Type =
-				"Jump"
-		})
-	end)
-
-proximityButton.MouseButton1Click:
+proxButton.MouseButton1Click:
 	Connect(function()
 
 		placementMode =
@@ -2571,7 +2950,37 @@ promptButton.MouseButton1Click:
 			"Prompt"
 
 		status.Text =
-			"Click object with prompt."
+			"Click object with ProximityPrompt."
+	end)
+
+clickButton.MouseButton1Click:
+	Connect(function()
+
+		placementMode =
+			"Click"
+
+		status.Text =
+			"Click object with ClickDetector."
+	end)
+
+holdClickButton.MouseButton1Click:
+	Connect(function()
+
+		placementMode =
+			"HoldClick"
+
+		status.Text =
+			"Click object with ClickDetector."
+	end)
+
+jumpButton.MouseButton1Click:
+	Connect(function()
+
+		addNode({
+
+			Type =
+				"Jump"
+		})
 	end)
 
 keyButton.MouseButton1Click:
@@ -2583,11 +2992,27 @@ keyButton.MouseButton1Click:
 				"Key",
 
 			KeyCode =
-				Enum.KeyCode.R,
-
-			HoldDuration =
-				0.08
+				Enum.KeyCode.R
 		})
+	end)
+
+holdKeyButton.MouseButton1Click:
+	Connect(function()
+
+		addNode({
+
+			Type =
+				"HoldKey",
+
+			KeyCode =
+				Enum.KeyCode.W,
+
+			Duration =
+				SETTINGS.DefaultHoldKeyDuration
+		})
+
+		status.Text =
+			"Hold Key node added. EDIT to choose key."
 	end)
 
 -- ==========================================================
@@ -2599,7 +3024,6 @@ local function findPrompt(
 )
 
 	if not part then
-
 		return nil
 	end
 
@@ -2611,7 +3035,6 @@ local function findPrompt(
 			)
 
 	if prompt then
-
 		return prompt
 	end
 
@@ -2621,7 +3044,6 @@ local function findPrompt(
 	for _ = 1, 6 do
 
 		if not current then
-
 			break
 		end
 
@@ -2633,7 +3055,6 @@ local function findPrompt(
 				)
 
 		if found then
-
 			return found
 		end
 
@@ -2645,7 +3066,57 @@ local function findPrompt(
 end
 
 -- ==========================================================
--- WORLD CLICK PLACEMENT
+-- FIND CLICK DETECTOR
+-- ==========================================================
+
+local function findClickDetector(
+	part
+)
+
+	if not part then
+		return nil
+	end
+
+	local detector =
+		part:
+			FindFirstChildWhichIsA(
+				"ClickDetector",
+				true
+			)
+
+	if detector then
+		return detector
+	end
+
+	local current =
+		part.Parent
+
+	for _ = 1, 6 do
+
+		if not current then
+			break
+		end
+
+		local found =
+			current:
+				FindFirstChildWhichIsA(
+					"ClickDetector",
+					true
+				)
+
+		if found then
+			return found
+		end
+
+		current =
+			current.Parent
+	end
+
+	return nil
+end
+
+-- ==========================================================
+-- WORLD PLACEMENT
 -- ==========================================================
 
 track(
@@ -2653,16 +3124,16 @@ track(
 		Connect(function()
 
 			if not placementMode then
-
 				return
 			end
 
 			local target =
 				mouse.Target
 
-			if placementMode
-				== "Walk"
-			then
+			local hitPosition =
+				mouse.Hit.Position
+
+			if placementMode == "Walk" then
 
 				addNode({
 
@@ -2670,13 +3141,38 @@ track(
 						"Walk",
 
 					Position =
-						mouse.Hit.Position
+						hitPosition
 				})
 
 				placementMode =
 					nil
 
-			elseif placementMode
+				return
+			end
+
+			if placementMode == "TP" then
+
+				addNode({
+
+					Type =
+						"TP",
+
+					Position =
+						hitPosition
+						+ Vector3.new(
+							0,
+							SETTINGS.TeleportHeightOffset,
+							0
+						)
+				})
+
+				placementMode =
+					nil
+
+				return
+			end
+
+			if placementMode
 				== "Proximity"
 			then
 
@@ -2698,9 +3194,10 @@ track(
 				placementMode =
 					nil
 
-			elseif placementMode
-				== "Prompt"
-			then
+				return
+			end
+
+			if placementMode == "Prompt" then
 
 				local prompt =
 					findPrompt(
@@ -2717,71 +3214,154 @@ track(
 						Prompt =
 							prompt
 					})
-
 				else
 
 					status.Text =
-						"No prompt found."
+						"No ProximityPrompt found."
 				end
 
 				placementMode =
 					nil
 
-			elseif selectedNodeIndex then
+				return
+			end
 
-				local node =
-					nodes[
-						selectedNodeIndex
-					]
+			if placementMode == "Click"
+				or placementMode
+					== "HoldClick"
+			then
 
-				if placementMode
-					== "EditWalk"
-				then
+				local detector =
+					findClickDetector(
+						target
+					)
 
-					node.Position =
-						mouse.Hit.Position
+				if detector then
 
-					placementMode =
-						nil
+					if placementMode
+						== "HoldClick"
+					then
 
-					rebuildList()
+						addNode({
 
-				elseif placementMode
-					== "EditProximity"
-				then
+							Type =
+								"HoldClick",
 
-					if target then
+							ClickDetector =
+								detector,
 
-						node.Target =
-							target
+							Duration =
+								SETTINGS.DefaultHoldClickDuration
+						})
 
-						placementMode =
-							nil
+					else
 
-						rebuildList()
+						addNode({
+
+							Type =
+								"Click",
+
+							ClickDetector =
+								detector
+						})
 					end
 
-				elseif placementMode
-					== "EditPrompt"
-				then
+				else
 
-					local prompt =
-						findPrompt(
-							target
-						)
+					status.Text =
+						"No ClickDetector found."
+				end
 
-					if prompt then
+				placementMode =
+					nil
 
-						node.Prompt =
-							prompt
+				return
+			end
 
-						placementMode =
-							nil
+			-- ==================================================
+			-- EDIT TARGETS
+			-- ==================================================
 
-						rebuildList()
-					end
+			if not selectedNodeIndex then
+
+				placementMode =
+					nil
+
+				return
+			end
+
+			local node =
+				nodes[
+					selectedNodeIndex
+				]
+
+			if not node then
+
+				placementMode =
+					nil
+
+				return
+			end
+
+			if placementMode == "EditWalk" then
+
+				node.Position =
+					hitPosition
+
+			elseif placementMode == "EditTP" then
+
+				node.Position =
+					hitPosition
+					+ Vector3.new(
+						0,
+						SETTINGS.TeleportHeightOffset,
+						0
+					)
+
+			elseif placementMode
+				== "EditProximity"
+			then
+
+				if target then
+
+					node.Target =
+						target
+				end
+
+			elseif placementMode == "EditPrompt" then
+
+				local prompt =
+					findPrompt(
+						target
+					)
+
+				if prompt then
+
+					node.Prompt =
+						prompt
+				end
+
+			elseif placementMode == "EditClick"
+				or placementMode
+					== "EditHoldClick"
+			then
+
+				local detector =
+					findClickDetector(
+						target
+					)
+
+				if detector then
+
+					node.ClickDetector =
+						detector
 				end
 			end
+
+			placementMode =
+				nil
+
+			rebuildList()
 		end)
 )
 
@@ -2798,7 +3378,6 @@ upButton.MouseButton1Click:
 		if not i
 			or i <= 1
 		then
-
 			return
 		end
 
@@ -2822,7 +3401,6 @@ downButton.MouseButton1Click:
 		if not i
 			or i >= #nodes
 		then
-
 			return
 		end
 
@@ -2838,7 +3416,7 @@ downButton.MouseButton1Click:
 	end)
 
 -- ==========================================================
--- VALUES
+-- VALUE -
 -- ==========================================================
 
 minusButton.MouseButton1Click:
@@ -2854,16 +3432,21 @@ minusButton.MouseButton1Click:
 			return
 		end
 
-		if node.Type == "Wait" then
+		if node.Type == "Wait"
+			or node.Type == "HoldClick"
+			or node.Type == "HoldKey"
+		then
 
 			node.Duration =
 				math.max(
-					0,
-					(node.Duration or 2)
-						- 0.5
+					0.1,
+					(node.Duration or 1)
+						- 0.25
 				)
 
-		elseif node.Type == "Proximity" then
+		elseif node.Type
+			== "Proximity"
+		then
 
 			node.Distance =
 				math.max(
@@ -2871,19 +3454,14 @@ minusButton.MouseButton1Click:
 					(node.Distance or 6)
 						- 1
 				)
-
-		elseif node.Type == "Key" then
-
-			node.HoldDuration =
-				math.max(
-					0.05,
-					(node.HoldDuration or 0.08)
-						- 0.1
-				)
 		end
 
 		rebuildList()
 	end)
+
+-- ==========================================================
+-- VALUE +
+-- ==========================================================
 
 plusButton.MouseButton1Click:
 	Connect(function()
@@ -2898,31 +3476,27 @@ plusButton.MouseButton1Click:
 			return
 		end
 
-		if node.Type == "Wait" then
+		if node.Type == "Wait"
+			or node.Type == "HoldClick"
+			or node.Type == "HoldKey"
+		then
 
 			node.Duration =
 				math.min(
 					60,
-					(node.Duration or 2)
-						+ 0.5
+					(node.Duration or 1)
+						+ 0.25
 				)
 
-		elseif node.Type == "Proximity" then
+		elseif node.Type
+			== "Proximity"
+		then
 
 			node.Distance =
 				math.min(
 					100,
 					(node.Distance or 6)
 						+ 1
-				)
-
-		elseif node.Type == "Key" then
-
-			node.HoldDuration =
-				math.min(
-					10,
-					(node.HoldDuration or 0.08)
-						+ 0.1
 				)
 		end
 
@@ -2951,32 +3525,40 @@ editButton.MouseButton1Click:
 			placementMode =
 				"EditWalk"
 
-			status.Text =
-				"Click new walk position."
+		elseif node.Type == "TP" then
+
+			placementMode =
+				"EditTP"
 
 		elseif node.Type == "Proximity" then
 
 			placementMode =
 				"EditProximity"
 
-			status.Text =
-				"Click new target."
-
 		elseif node.Type == "Prompt" then
 
 			placementMode =
 				"EditPrompt"
 
-			status.Text =
-				"Click new prompt."
+		elseif node.Type == "Click" then
 
-		elseif node.Type == "Key" then
+			placementMode =
+				"EditClick"
+
+		elseif node.Type == "HoldClick" then
+
+			placementMode =
+				"EditHoldClick"
+
+		elseif node.Type == "Key"
+			or node.Type == "HoldKey"
+		then
 
 			keyCaptureNode =
 				selectedNodeIndex
 
 			status.Text =
-				"Press key."
+				"Press a keyboard key..."
 		end
 	end)
 
@@ -2988,7 +3570,6 @@ deleteButton.MouseButton1Click:
 	Connect(function()
 
 		if not selectedNodeIndex then
-
 			return
 		end
 
@@ -3041,7 +3622,11 @@ track(
 				]
 
 			if node
-				and node.Type == "Key"
+				and (
+					node.Type == "Key"
+					or node.Type
+						== "HoldKey"
+				)
 			then
 
 				node.KeyCode =
@@ -3089,7 +3674,7 @@ loopButton.MouseButton1Click:
 	end)
 
 -- ==========================================================
--- STOP ROUTE
+-- STOP
 -- ==========================================================
 
 local function stopRoute()
@@ -3120,13 +3705,12 @@ stopButton.MouseButton1Click:
 	)
 
 -- ==========================================================
--- RUN ROUTE
+-- RUN
 -- ==========================================================
 
 local function runRoute()
 
 	if executing then
-
 		return
 	end
 
@@ -3159,7 +3743,8 @@ local function runRoute()
 			) do
 
 				if stopRequested
-					or thisRun ~= routeId
+					or thisRun
+						~= routeId
 				then
 
 					break
@@ -3173,8 +3758,6 @@ local function runRoute()
 						node,
 						index
 					)
-					.. " | "
-					.. SETTINGS.MovementMode
 
 				updateMarkers()
 
@@ -3186,7 +3769,8 @@ local function runRoute()
 					)
 
 				if stopRequested
-					or thisRun ~= routeId
+					or thisRun
+						~= routeId
 				then
 
 					break
@@ -3220,7 +3804,8 @@ local function runRoute()
 			end
 
 			if stopRequested
-				or thisRun ~= routeId
+				or thisRun
+					~= routeId
 			then
 
 				break
@@ -3268,9 +3853,6 @@ clearButton.MouseButton1Click:
 			nil
 
 		rebuildList()
-
-		status.Text =
-			"Nodes cleared."
 	end)
 
 -- ==========================================================
@@ -3315,6 +3897,9 @@ getgenv().NodeAutoDoer = {
 	Stop =
 		stopRoute,
 
+	Refresh =
+		rebuildList,
+
 	SetDirect =
 		function()
 
@@ -3331,10 +3916,7 @@ getgenv().NodeAutoDoer = {
 				"Pathfinding"
 
 			refreshMovementButton()
-		end,
-
-	Refresh =
-		rebuildList
+		end
 }
 
 -- ==========================================================
@@ -3351,6 +3933,21 @@ local function cleanup()
 		false
 
 	stopRoute()
+
+	-- Safety releases.
+
+	pcall(function()
+
+		VirtualInputManager:
+			SendMouseButtonEvent(
+				0,
+				0,
+				0,
+				false,
+				game,
+				0
+			)
+	end)
 
 	for _, connection in ipairs(
 		connections
@@ -3414,14 +4011,16 @@ status.Text =
 
 print("==========================================")
 print("NODE AUTO-DOER")
+print("HOLD INPUT EDITION")
 print("==========================================")
 print("")
-print("DIRECT MODE FIXED")
+print("NEW:")
+print("HOLD CLICK")
+print("HOLD KEY")
 print("")
-print("Direct now uses Humanoid:MoveTo()")
-print("instead of Humanoid:Move().")
+print("Select Hold Key -> EDIT -> press key.")
+print("Use +/- to change hold duration.")
 print("")
-print("Movement defaults to DIRECT.")
-print("Click movement button for Pathfinding.")
-print("")
+print("Select Hold Click target in-world.")
+print("Use +/- to change hold duration.")
 print("==========================================")
