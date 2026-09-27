@@ -1,0 +1,198 @@
+local Players = game:GetService("Players")
+
+local function getStatsText(player)
+	local leaderstats = player:FindFirstChild("leaderstats")
+
+	if not leaderstats then
+		return ""
+	end
+
+	local lines = {}
+
+	for _, stat in ipairs(leaderstats:GetChildren()) do
+		if stat:IsA("ValueBase") then
+			table.insert(
+				lines,
+				stat.Name .. ": " .. tostring(stat.Value)
+			)
+		end
+	end
+
+	return table.concat(lines, "\n")
+end
+
+local function updateBillboard(player)
+	local character = player.Character
+	if not character then
+		return
+	end
+
+	local head = character:FindFirstChild("Head")
+	if not head then
+		return
+	end
+
+	local billboard = head:FindFirstChild("PlayerNameBillboard")
+	if not billboard then
+		return
+	end
+
+	local background = billboard:FindFirstChild("Background")
+	if not background then
+		return
+	end
+
+	local statsLabel = background:FindFirstChild("Stats")
+	if not statsLabel then
+		return
+	end
+
+	local text = getStatsText(player)
+
+	statsLabel.Text = text
+	statsLabel.Visible = text ~= ""
+end
+
+local function connectLeaderstats(player)
+	local function setupFolder(folder)
+		if not folder then
+			return
+		end
+
+		local function connectStat(stat)
+			if stat:IsA("ValueBase") then
+				stat:GetPropertyChangedSignal("Value"):Connect(function()
+					updateBillboard(player)
+				end)
+			end
+		end
+
+		for _, stat in ipairs(folder:GetChildren()) do
+			connectStat(stat)
+		end
+
+		folder.ChildAdded:Connect(function(stat)
+			connectStat(stat)
+			updateBillboard(player)
+		end)
+
+		folder.ChildRemoved:Connect(function()
+			updateBillboard(player)
+		end)
+
+		updateBillboard(player)
+	end
+
+	local existing = player:FindFirstChild("leaderstats")
+
+	if existing then
+		setupFolder(existing)
+	end
+
+	player.ChildAdded:Connect(function(child)
+		if child.Name == "leaderstats" then
+			setupFolder(child)
+		end
+	end)
+end
+
+local function createBillboard(player, character)
+	local head = character:WaitForChild("Head", 10)
+
+	if not head then
+		return
+	end
+
+	local oldBillboard = head:FindFirstChild("PlayerNameBillboard")
+
+	if oldBillboard then
+		oldBillboard:Destroy()
+	end
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "PlayerNameBillboard"
+	billboard.Adornee = head
+
+	-- Uses world-space sizing so it naturally gets smaller with distance
+	billboard.Size = UDim2.new(5, 0, 2.5, 0)
+
+	billboard.StudsOffset = Vector3.new(0, 3.5, 0)
+
+	-- Makes walls/objects block the billboard
+	billboard.AlwaysOnTop = false
+
+	-- Stops rendering after this distance
+	billboard.MaxDistance = 150
+
+	billboard.Parent = head
+
+	local background = Instance.new("Frame")
+	background.Name = "Background"
+	background.Size = UDim2.fromScale(1, 1)
+	background.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+	background.BackgroundTransparency = 0.25
+	background.BorderSizePixel = 0
+	background.Parent = billboard
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = background
+
+	local displayName = Instance.new("TextLabel")
+	displayName.Name = "DisplayName"
+	displayName.Size = UDim2.new(1, -10, 0.3, 0)
+	displayName.Position = UDim2.new(0, 5, 0.03, 0)
+	displayName.BackgroundTransparency = 1
+	displayName.Font = Enum.Font.GothamBold
+	displayName.Text = player.DisplayName
+	displayName.TextColor3 = Color3.fromRGB(255, 255, 255)
+	displayName.TextScaled = true
+	displayName.Parent = background
+
+	local username = Instance.new("TextLabel")
+	username.Name = "Username"
+	username.Size = UDim2.new(1, -10, 0.2, 0)
+	username.Position = UDim2.new(0, 5, 0.33, 0)
+	username.BackgroundTransparency = 1
+	username.Font = Enum.Font.Gotham
+	username.Text = "@" .. player.Name
+	username.TextColor3 = Color3.fromRGB(180, 180, 180)
+	username.TextScaled = true
+	username.Parent = background
+
+	local stats = Instance.new("TextLabel")
+	stats.Name = "Stats"
+	stats.Size = UDim2.new(1, -10, 0.42, 0)
+	stats.Position = UDim2.new(0, 5, 0.55, 0)
+	stats.BackgroundTransparency = 1
+	stats.Font = Enum.Font.GothamMedium
+	stats.Text = getStatsText(player)
+	stats.TextColor3 = Color3.fromRGB(120, 200, 255)
+	stats.TextScaled = true
+	stats.TextWrapped = true
+	stats.TextXAlignment = Enum.TextXAlignment.Center
+	stats.TextYAlignment = Enum.TextYAlignment.Top
+	stats.Parent = background
+
+	updateBillboard(player)
+end
+
+local function setupPlayer(player)
+	connectLeaderstats(player)
+
+	if player.Character then
+		createBillboard(player, player.Character)
+	end
+
+	player.CharacterAdded:Connect(function(character)
+		createBillboard(player, character)
+	end)
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+	setupPlayer(player)
+end
+
+Players.PlayerAdded:Connect(function(player)
+	setupPlayer(player)
+end)
