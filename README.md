@@ -1,2 +1,2 @@
-# Dark-dex-based-BTOOLS
-!!IMPORTANT!! I have only tested these with Dark Dex's built in executor!!
+# roblox-scripts-for-no-reason
+since these are lua they should work in normal executors
